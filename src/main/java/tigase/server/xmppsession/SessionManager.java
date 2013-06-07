@@ -86,6 +86,7 @@ import java.security.Security;
 import java.util.ArrayDeque;
 import java.util.Arrays;
 import java.util.Collection;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedList;
 import java.util.List;
@@ -176,6 +177,8 @@ public class SessionManager extends AbstractMessageReceiver implements Configura
 	private ConnectionCheckCommandHandler connectionCheckCommandHandler =
 			new ConnectionCheckCommandHandler();
 
+	private StaleConnectionCloser staleConnectionCloser = new StaleConnectionCloser();	
+	
 	/**
 	 * Method description
 	 * 
@@ -225,6 +228,7 @@ public class SessionManager extends AbstractMessageReceiver implements Configura
 		SessionManagerConfig.getDefaults(props, params);
 
 		props.put(FORCE_DETAIL_STALE_CONNECTION_CHECK, true);
+		props.put(STALE_CONNECTION_CLOSER_QUEUE_SIZE_KEY, StaleConnectionCloser.DEF_QUEUE_SIZE);
 		
 		return props;
 	}
@@ -659,7 +663,16 @@ public class SessionManager extends AbstractMessageReceiver implements Configura
 			forceDetailStaleConnectionCheck = (Boolean) props.get(FORCE_DETAIL_STALE_CONNECTION_CHECK);	
 			log.log(Level.CONFIG, "forced detailed stale connection checking is set to = {0}", forceDetailStaleConnectionCheck);
 		}
+
+		if (props.get(STALE_CONNECTION_CLOSER_QUEUE_SIZE_KEY) != null) {
+			staleConnectionCloser.setMaxQueueSize((Integer) props.get(STALE_CONNECTION_CLOSER_QUEUE_SIZE_KEY));
+			log.log(Level.CONFIG, "stale connection closer queue is set to = {0}", staleConnectionCloser.getMaxQueueSize());
+		}		
 		
+		if (!staleConnectionCloser.isScheduled()) {
+			staleConnectionCloser.schedule();
+		}
+				
 		if (props.size() == 1) {
 			// If props.size() == 1, it means this is a single property update
 			// and this component does not support single property change for the rest
@@ -891,30 +904,39 @@ public class SessionManager extends AbstractMessageReceiver implements Configura
 							log.log(Level.WARNING, "Found stale XMPPResourceConnection {0} by userId {1}, removing...", new Object[]{connection, userId});
 						}
 						sessionByUserId.removeResourceConnection(connection);
-						return;
 					}
 				}
+				return;
 			}
 			
-			if (!forceDetailStaleConnectionCheck)
-				return;
-						
-			// Let's make sure there is no stale XMPPResourceConnection in some
-			// XMPPSession
-			// object which may cause problems and packets sent to nowhere.
-			// This might an expensive operation though....
-			log.log(Level.INFO, "Trying to find and remove stale XMPPResourceConnection: {0}",
-					connectionId);
-			for (XMPPSession session : sessionsByNodeId.values()) {
-				connection = session.getResourceForConnectionId(connectionId);
-				if (connection != null) {
-					log.log(Level.WARNING, "Found stale XMPPResourceConnection: {0}, removing...",
-							connection);
-					session.removeResourceConnection(connection);
-					break;
-				}
-			}
-		} // end of if (conn != null) else
+			// Maybe we should move this loop based check to separe thread for performance reason
+			// Check if our Set<JID> of not found sessions contains each of available connections from each session
+ 			if (!forceDetailStaleConnectionCheck)
+ 				return;
+
+ 			// Let's make sure there is no stale XMPPResourceConnection in some
+ 			// XMPPSession
+ 			// object which may cause problems and packets sent to nowhere.
+			// This might an expensive operation though.... add item to queue 
+			// executed in other thread
+			staleConnectionCloser.queueForClose(connectionId);
+			
+			// code below is original loop for finding stale XMPPResourceConnections
+//			log.log(Level.INFO, "Trying to find and remove stale XMPPResourceConnection: {0}",
+//					connectionId);
+//			
+//			for (XMPPSession session : sessionsByNodeId.values()) {
+//				connection = session.getResourceForConnectionId(connectionId);
+//				if (connection != null) {
+//					log.log(Level.WARNING, "Found stale XMPPResourceConnection: {0}, removing...",
+//							connection);
+//					session.removeResourceConnection(connection);
+//
+//					break;
+//				}
+//			}			
+ 		}    // end of if (conn != null) else
+
 	}
 
 	protected void closeSession(XMPPResourceConnection conn, boolean closeOnly) {
@@ -2322,6 +2344,154 @@ public class SessionManager extends AbstractMessageReceiver implements Configura
 			}
 
 			fastAddOutPacket(packet.okResult((String) null, 0));
+		}
+	}
+	
+	private class StaleConnectionCloser {
+		
+		public static final int DEF_QUEUE_SIZE = 1000;
+		public static final long DEF_TIMEOUT = 30 * 1000;
+		
+		private long timeout;
+		private int maxQueueSize;
+		private Set<JID> workingSet;
+		private Set<JID> queueSet;
+
+		private Thread thread;
+
+		private TimerTask task;
+		
+		public StaleConnectionCloser() {
+			this(DEF_QUEUE_SIZE, DEF_TIMEOUT);
+		}
+		
+		public StaleConnectionCloser(int queueSize, long timeout) {
+			this.timeout = timeout;
+			this.maxQueueSize = queueSize;
+			workingSet = new HashSet<JID>(queueSize);
+			queueSet = new HashSet<JID>(queueSize);
+		}
+		
+		public int getMaxQueueSize() {
+			return maxQueueSize;
+		}
+		
+		public void setMaxQueueSize(int queueSize) {
+			this.maxQueueSize = queueSize;
+		}
+
+		public long getTimeout() {
+			return timeout;
+		}
+		
+		public boolean queueForClose(JID connectionId) {
+			boolean result;
+			synchronized (this) {
+				if (queueSet.size() > maxQueueSize)
+					return false;
+				
+				result = queueSet.add(connectionId);
+			}
+			
+			if (!result && log.isLoggable(Level.FINEST)) {
+				log.log(Level.FINEST, "connection with id {0} already queued for removing as stale"
+						+ " XMPPResourceConnection", connectionId);
+			}
+			return result;
+		}
+			
+		public void closeConnections() {
+			// nothing waiting to remove
+			if (workingSet.isEmpty())
+				return;
+			
+			log.log(Level.INFO, "Trying to find and remove stale XMPPResourceConnections");
+			LinkedList<XMPPResourceConnection> staleConnections = new LinkedList<XMPPResourceConnection>();
+			
+			for (XMPPSession session : sessionsByNodeId.values()) {
+				List<XMPPResourceConnection> connections = session.getActiveResources();
+				for (XMPPResourceConnection connection : connections) {
+					try {
+						JID connectionId = connection.getConnectionId();
+						if (workingSet.contains(connectionId)) {
+							// queue connection for removal
+							staleConnections.offer(connection);
+							
+							// remove from working set
+							workingSet.remove(connectionId);
+						}
+					}
+					catch (NoConnectionIdException ex) {
+						log.log(Level.FINEST, "found connection without proper connection id = {0}",
+								connection.toString());
+					}
+				}
+				
+				// remove queued connections
+				XMPPResourceConnection connection;
+				while ((connection = staleConnections.poll()) != null) {
+					log.log(Level.WARNING, "Found stale XMPPResourceConnection: {0}, removing...",
+							connection);
+					session.removeResourceConnection(connection);
+				}
+				
+				// working set is empty so break iteration now
+				if (workingSet.isEmpty())
+					break;
+			}
+		}
+		
+		public void run() {
+			if (thread != null && thread.isAlive())
+				return;
+			
+			thread = new Thread() {
+				@Override
+				public void run() {
+					process();
+					thread = null;
+				}
+			};
+			
+			thread.start();
+		}
+		
+		public boolean isScheduled() {
+			return task != null && task.scheduledExecutionTime() > System.currentTimeMillis();
+		}
+		
+		public void schedule() {
+			task = new TimerTask() {
+				@Override
+				public void run() {
+					StaleConnectionCloser.this.run();
+				}
+			};
+			addTimerTask(task, timeout);
+		}
+		
+		private void process() {
+			try {
+				while(swapSets()) {
+					closeConnections();							
+				}
+			}
+			catch (Throwable th) {
+				log.log(Level.SEVERE, "exception closing stale connections", th);
+			}
+			
+			schedule();
+		}
+				
+		private boolean swapSets() {
+			synchronized (this) {
+				Set<JID> tmp = workingSet;
+				workingSet = queueSet;
+				queueSet = tmp;
+				queueSet.clear();
+				
+				return !workingSet.isEmpty();
+			}
 		}
 	}
 }
