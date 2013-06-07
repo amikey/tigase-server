@@ -129,6 +129,7 @@ public class SessionManager extends AbstractMessageReceiver implements Configura
 	private PacketDefaultHandler defPacketHandler = null;
 
 	private String defPluginsThreadsPool = "default-threads-pool";
+	private boolean forceDetailStaleConnectionCheck = true;
 	private int maxUserConnections = 0;
 
 	private int maxUserSessions = 0;
@@ -223,6 +224,8 @@ public class SessionManager extends AbstractMessageReceiver implements Configura
 
 		SessionManagerConfig.getDefaults(props, params);
 
+		props.put(FORCE_DETAIL_STALE_CONNECTION_CHECK, true);
+		
 		return props;
 	}
 
@@ -502,6 +505,19 @@ public class SessionManager extends AbstractMessageReceiver implements Configura
 	 */
 	@Override
 	public void handleResourceBind(XMPPResourceConnection conn) {
+		if (!conn.isServerSession() && (!"USER_STATUS".equals(conn.getSessionId()))) {
+			try {
+				Packet user_login_cmd = Command.USER_LOGIN.getPacket(getComponentId(), conn
+						.getConnectionId(), StanzaType.set, conn.nextStanzaId(), Command.DataType.submit);
+
+				Command.addFieldValue(user_login_cmd, "user-jid", conn.getjid().toString());
+				addOutPacket(user_login_cmd);
+			} catch (NoConnectionIdException ex) {
+
+				// This actually should not happen... might be a bug:
+				log.log(Level.WARNING, "This should not happen, check it out!, ", ex);
+			}
+		}
 	}
 
 	/**
@@ -639,6 +655,11 @@ public class SessionManager extends AbstractMessageReceiver implements Configura
 			}
 		}
 
+		if (props.get(FORCE_DETAIL_STALE_CONNECTION_CHECK) != null) {
+			forceDetailStaleConnectionCheck = (Boolean) props.get(FORCE_DETAIL_STALE_CONNECTION_CHECK);	
+			log.log(Level.CONFIG, "forced detailed stale connection checking is set to = {0}", forceDetailStaleConnectionCheck);
+		}
+		
 		if (props.size() == 1) {
 			// If props.size() == 1, it means this is a single property update
 			// and this component does not support single property change for the rest
@@ -838,7 +859,7 @@ public class SessionManager extends AbstractMessageReceiver implements Configura
 		return trusted.add(jid.getBareJID().toString());
 	}
 
-	protected void closeConnection(JID connectionId, boolean closeOnly) {
+	protected void closeConnection(JID connectionId, String userId, boolean closeOnly) {
 		if (log.isLoggable(Level.FINER)) {
 			log.log(Level.FINER, "Stream closed from: {0}", connectionId);
 		}
@@ -857,6 +878,27 @@ public class SessionManager extends AbstractMessageReceiver implements Configura
 		} else {
 			log.log(Level.FINE, "Can not find resource connection for connectionId: {0}",
 					connectionId);
+			
+			if (userId != null) {
+				// check using userId if we can find stale XMPPResourceConnection
+				log.log(Level.WARNING, "Found trying to find stale XMPPResourceConnection by userId {0}...", userId);
+				JID userJid = JID.jidInstanceNS(userId);
+				XMPPSession sessionByUserId = sessionsByNodeId.get(userJid.getBareJID());
+				if (sessionByUserId != null) {
+					connection = sessionByUserId.getResourceConnection(connectionId);
+					if (connection != null) {
+						if (log.isLoggable(Level.FINEST)) {
+							log.log(Level.WARNING, "Found stale XMPPResourceConnection {0} by userId {1}, removing...", new Object[]{connection, userId});
+						}
+						sessionByUserId.removeResourceConnection(connection);
+						return;
+					}
+				}
+			}
+			
+			if (!forceDetailStaleConnectionCheck)
+				return;
+						
 			// Let's make sure there is no stale XMPPResourceConnection in some
 			// XMPPSession
 			// object which may cause problems and packets sent to nowhere.
@@ -1701,9 +1743,11 @@ public class SessionManager extends AbstractMessageReceiver implements Configura
 							}
 
 							try {
-								addOutPacketWithTimeout(Command.CHECK_USER_CONNECTION.getPacket(
-										getComponentId(), connection.getConnectionId(), StanzaType.get, UUID
-												.randomUUID().toString()), connectionCheckCommandHandler, 30l,
+								Packet command = Command.CHECK_USER_CONNECTION.getPacket(
+ 										getComponentId(), connection.getConnectionId(), StanzaType.get, UUID
+										.randomUUID().toString());
+								Command.addFieldValue(command, "user-jid", userId.toString());
+								addOutPacketWithTimeout(command, connectionCheckCommandHandler, 30l,
 										TimeUnit.SECONDS);
 							} catch (NoConnectionIdException ex) {
 
@@ -2031,7 +2075,8 @@ public class SessionManager extends AbstractMessageReceiver implements Configura
 				}
 
 				// The connection is not longer active, closing the user session here.
-				closeConnection(packet.getTo(), false);
+				String userJid = Command.getFieldValue(packet, "user-jid");
+				closeConnection(packet.getTo(), userJid, false);
 			}
 		}
 
@@ -2048,7 +2093,8 @@ public class SessionManager extends AbstractMessageReceiver implements Configura
 						"Connection checker timeout expired, closing connection: {0}", packet.getTo());
 			}
 
-			closeConnection(packet.getTo(), false);
+			String userJid = Command.getFieldValue(packet, "user-jid");
+			closeConnection(packet.getTo(), userJid, false);
 		}
 	}
 
@@ -2194,7 +2240,8 @@ public class SessionManager extends AbstractMessageReceiver implements Configura
 				log.log(Level.FINEST, "Executing connection close for: {0}", packet);
 			}
 
-			closeConnection(packet.getFrom(), false);
+			String userJid = Command.getFieldValue(packet, "user-jid");
+			closeConnection(packet.getFrom(), userJid, false);
 		}
 	}
 

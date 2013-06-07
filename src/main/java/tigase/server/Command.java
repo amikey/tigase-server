@@ -65,6 +65,12 @@ public enum Command {
 	STREAM_OPENED(Priority.SYSTEM),
 
 	/**
+	 * Command sent from session manager to the connection manager after
+	 * successful user login.
+	 */
+	USER_LOGIN(Priority.SYSTEM),
+	
+	/**
 	 * Command sent from a connection manager to the session manager when a
 	 * connection or stream has been closed.
 	 */

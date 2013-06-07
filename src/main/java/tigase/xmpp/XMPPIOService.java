@@ -82,6 +82,7 @@ public class XMPPIOService<RefObject> extends IOService<RefObject> {
 
 	private XMPPDomBuilderHandler<RefObject> domHandler = null;
 	protected SimpleParser parser = SingletonFactory.getParserInstance();
+	private String jid = null;
 	@SuppressWarnings("rawtypes")
 	private XMPPIOServiceListener serviceListener = null;
 	private static String cross_domain_policy = null;
@@ -617,6 +618,35 @@ public class XMPPIOService<RefObject> extends IOService<RefObject> {
 			}
 		}
 	}
+
+	//~--- set methods ----------------------------------------------------------
+
+	/**
+	 * Method description
+	 *
+	 *
+	 * @param jid
+	 */
+	public void setUserJid(String jid) {
+		this.jid = jid;
+	}
+	
+	public String getUserJid() {
+		return this.jid;
+	}
+	
+	//~--- methods --------------------------------------------------------------
+	
+	/**
+	 * Method description
+	 *
+	 *
+	 * @return
+	 */
+	@Override
+	public String toString() {
+		return super.toString() + ", jid: " + jid;
+	}	
 } // XMPPIOService
 
 // ~ Formatted in Sun Code Convention

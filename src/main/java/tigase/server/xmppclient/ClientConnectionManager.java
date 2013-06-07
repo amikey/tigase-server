@@ -473,6 +473,11 @@ public class ClientConnectionManager extends ConnectionManager<XMPPIOService<Obj
 						Command.STREAM_CLOSED.getPacket(serv.getConnectionId(),
 								serv.getDataReceiver(), StanzaType.set, UUID.randomUUID().toString());
 
+				String userJid = serv.getUserJid();
+				if (userJid != null) {
+					Command.addFieldValue(command, "user-jid", userJid);
+				}
+				
 				// In case of mass-disconnects, adjust the timeout properly
 				addOutPacketWithTimeout(command, stoppedHandler, 120l, TimeUnit.SECONDS);
 				log.log(Level.FINE, "Service stopped, sending packet: {0}", command);
@@ -706,6 +711,33 @@ public class ClientConnectionManager extends ConnectionManager<XMPPIOService<Obj
 
 				break;
 
+			case USER_LOGIN:
+				String jid = Command.getFieldValue(iqc, "user-jid");
+
+				if (jid != null) {
+					if (serv != null) {
+
+						BareJID fromJID = null;
+						try {
+							fromJID = BareJID.bareJIDInstance(jid);
+						} catch (TigaseStringprepException ex) {
+							log.log(Level.SEVERE, null, ex);
+						}
+
+						if (fromJID != null) {
+							serv.setUserJid(jid);
+						}
+					} else {
+						if (log.isLoggable(Level.FINE)) {
+							log.log(Level.FINE, "Missing XMPPIOService for USER_LOGIN command: {0}", iqc);
+						}
+					}
+				} else {
+					log.log(Level.WARNING, "Missing user-jid for USER_LOGIN command: {0}", iqc);
+				}
+				
+				break;
+				
 			case STARTZLIB:
 				if (serv != null) {
 					if (log.isLoggable(Level.FINER)) {
