@@ -116,8 +116,10 @@ public abstract class SessionManagerConfig {
 	private static String[] CLUSTER_NODES_PROP_VAL = { "sess-man@localhost" };
 	protected static final String ADMIN_SCRIPTS_PROP_KEY = "admin-scripts-dir";
 	protected static final String ADMIN_SCRIPTS_PROP_VAL = "scripts/admin/";
+	protected static final String FORCE_DETAIL_STALE_CONNECTION_CHECK = "force-detail-stale-connection-check";
 	protected static final String SKIP_PRIVACY_PROP_KEY = "skip-privacy";
 	private static final boolean SKIP_PRIVACY_PROP_VAL = false;
+	protected static final String STALE_CONNECTION_CLOSER_QUEUE_SIZE_KEY = "stale-connection-closer-queue-size";
 	protected static final String AUTO_CREATE_OFFLINE_USER_PROP_KEY = "offline-user-autocreate";
 	protected static final String AUTO_CREATE_OFFLINE_USER_PROP_VAL = "false";
 	protected static final String SM_THREADS_POOL_PROP_KEY = "sm-threads-pool";
