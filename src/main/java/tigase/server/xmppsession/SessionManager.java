@@ -898,7 +898,7 @@ public class SessionManager extends AbstractMessageReceiver implements Configura
 				JID userJid = JID.jidInstanceNS(userId);
 				XMPPSession sessionByUserId = sessionsByNodeId.get(userJid.getBareJID());
 				if (sessionByUserId != null) {
-					connection = sessionByUserId.getResourceConnection(connectionId);
+					connection = sessionByUserId.getResourceForConnectionId(connectionId);
 					if (connection != null) {
 						if (log.isLoggable(Level.FINEST)) {
 							log.log(Level.WARNING, "Found stale XMPPResourceConnection {0} by userId {1}, removing...", new Object[]{connection, userId});
