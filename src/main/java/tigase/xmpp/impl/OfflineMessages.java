@@ -53,6 +53,7 @@ import java.util.Date;
 import java.util.LinkedList;
 import java.util.Map;
 import java.util.Queue;
+import java.util.TimeZone;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -80,8 +81,12 @@ public class OfflineMessages extends XMPPProcessor implements XMPPPostprocessorI
 			new String[] { "var" }, new String[] { "msgoffline" }) };
 	private static final String defHost = DNSResolver.getDefaultHostname();
 
-	private final SimpleDateFormat formatter =
-			new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSZ");
+	private final SimpleDateFormat formatter;
+
+	{
+		this.formatter = new SimpleDateFormat( "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'" );
+		this.formatter.setTimeZone( TimeZone.getTimeZone( "UTC" ) );
+	}
 
 	/**
 	 * Method description
